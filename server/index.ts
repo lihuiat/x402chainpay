@@ -15,8 +15,19 @@ const port = parseInt(process.env.PORT || "3001");
 const app = new Hono();
 
 // Enable CORS for frontend
+const defaultOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://x402chainpay.vercel.app",
+];
+
+const allowedOrigins = (process.env.CLIENT_ORIGINS ?? "")
+  .split(",")
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
 app.use("/*", cors({
-  origin: ["http://localhost:5173", "http://localhost:3000"],
+  origin: allowedOrigins.length > 0 ? allowedOrigins : defaultOrigins,
   credentials: true,
 }));
 
