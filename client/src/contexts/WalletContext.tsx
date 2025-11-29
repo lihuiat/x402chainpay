@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { createWalletClient, custom, type WalletClient } from 'viem';
-import { baseSepolia } from 'viem/chains';
+import { monadTestnet } from '../config/chains';
 import type { Hex } from 'viem';
 
 interface WalletContextType {
@@ -28,79 +28,136 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const checkConnection = async () => {
-    if (typeof window.ethereum !== 'undefined') {
-      try {
-        const accounts = await window.ethereum.request({ 
-          method: 'eth_accounts' 
-        }) as string[];
-        
-        if (accounts.length > 0) {
-          const client = createWalletClient({
-            account: accounts[0] as Hex,
-            chain: baseSepolia,
-            transport: custom(window.ethereum)
-          });
-          
-          setWalletClient(client);
-          setAddress(accounts[0] as Hex);
-          setIsConnected(true);
-        }
-      } catch (err) {
-        console.error('Failed to check wallet connection:', err);
+    if (typeof window.ethereum === 'undefined') {
+      return;
+    }
+
+    try {
+      // Handle multiple wallet providers
+      let ethereum = window.ethereum;
+      if (Array.isArray(ethereum)) {
+        ethereum = ethereum[0];
+      } else if (ethereum.providers && Array.isArray(ethereum.providers)) {
+        ethereum = ethereum.providers[0];
       }
+
+      const accounts = await ethereum.request({ 
+        method: 'eth_accounts' 
+      }) as string[];
+      
+      if (accounts.length > 0) {
+        const client = createWalletClient({
+          account: accounts[0] as Hex,
+          chain: monadTestnet,
+          transport: custom(ethereum)
+        });
+        
+        setWalletClient(client);
+        setAddress(accounts[0] as Hex);
+        setIsConnected(true);
+      }
+    } catch (err) {
+      console.error('检查钱包连接失败:', err);
     }
   };
 
   const connectWallet = useCallback(async () => {
+    console.log('connectWallet');
     setError(null);
     setIsConnecting(true);
 
     try {
       if (typeof window.ethereum === 'undefined') {
-        throw new Error('Please install MetaMask or another Ethereum wallet');
+        throw new Error('请安装 MetaMask 或其他以太坊钱包扩展');
       }
 
-      // Request account access
-      const accounts = await window.ethereum.request({ 
-        method: 'eth_requestAccounts' 
-      }) as string[];
+      // Handle multiple wallet providers
+      let ethereum = window.ethereum;
+      if (Array.isArray(ethereum)) {
+        console.warn('检测到多个钱包扩展，使用第一个');
+        ethereum = ethereum[0];
+      } else if (ethereum.providers && Array.isArray(ethereum.providers)) {
+        console.warn('检测到多个钱包扩展，使用第一个');
+        ethereum = ethereum.providers[0];
+      }
+
+      // Request account access with better error handling
+      let accounts: string[];
+      try {
+        accounts = await ethereum.request({ 
+          method: 'eth_requestAccounts' 
+        }) as string[];
+      } catch (requestError: any) {
+        console.error('请求账户访问失败:', requestError);
+        
+        // Handle user rejection
+        if (requestError.code === 4001 || requestError.message?.includes('rejected') || requestError.message?.includes('denied')) {
+          throw new Error('用户取消了连接请求');
+        }
+        
+        // Handle other errors
+        if (requestError.message) {
+          throw new Error(`连接失败: ${requestError.message}`);
+        }
+        
+        throw new Error('无法连接到钱包，请确保钱包扩展已启用');
+      }
+
+      console.log('accounts', accounts);
       
       if (accounts.length === 0) {
-        throw new Error('No accounts found');
+        throw new Error('未找到账户，请在钱包中创建或导入账户');
       }
 
-      // Check if on correct network (Base Sepolia)
-      const chainId = await window.ethereum.request({ 
-        method: 'eth_chainId' 
-      }) as string;
+      // Check if on correct network (Monad Testnet)
+      let chainId: string;
+      try {
+        chainId = await ethereum.request({ 
+          method: 'eth_chainId' 
+        }) as string;
+      } catch (chainError: any) {
+        console.error('获取链ID失败:', chainError);
+        throw new Error('无法获取当前网络信息');
+      }
       
-      const baseSepoliaChainIdHex = '0x14a34'; // 84532 in hex
+      const monadTestnetChainIdHex = '0x279F'; // 10143 in hex
       
-      if (chainId !== baseSepoliaChainIdHex) {
+      if (chainId !== monadTestnetChainIdHex) {
         try {
-          await window.ethereum.request({
+          await ethereum.request({
             method: 'wallet_switchEthereumChain',
-            params: [{ chainId: baseSepoliaChainIdHex }],
+            params: [{ chainId: monadTestnetChainIdHex }],
           });
         } catch (switchError: any) {
           // This error code indicates that the chain has not been added to browser wallet
           if (switchError.code === 4902) {
-            await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: baseSepoliaChainIdHex,
-                chainName: 'Base Sepolia',
-                nativeCurrency: {
-                  name: 'Ethereum',
-                  symbol: 'ETH',
-                  decimals: 18,
-                },
-                rpcUrls: ['https://sepolia.base.org'],
-                blockExplorerUrls: ['https://sepolia.basescan.org'],
-              }],
-            });
+            try {
+              await ethereum.request({
+                method: 'wallet_addEthereumChain',
+                params: [{
+                  chainId: monadTestnetChainIdHex,
+                  chainName: 'Monad Testnet',
+                  nativeCurrency: {
+                    name: 'Monad',
+                    symbol: 'MON',
+                    decimals: 18,
+                  },
+                  rpcUrls: ['https://testnet-rpc.monad.xyz'],
+                  blockExplorerUrls: ['https://testnet.monadscan.com'],
+                }],
+              });
+            } catch (addError: any) {
+              console.error('添加网络失败:', addError);
+              if (addError.code === 4001) {
+                throw new Error('用户取消了添加网络请求');
+              }
+              throw new Error('无法添加 Monad Testnet 网络到钱包');
+            }
+          } else if (switchError.code === 4001) {
+            throw new Error('用户取消了切换网络请求');
           } else {
-            throw switchError;
+            console.error('切换网络失败:', switchError);
+            throw new Error(`切换网络失败: ${switchError.message || '未知错误'}`);
           }
         }
       }
@@ -108,16 +165,46 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       // Create viem wallet client
       const client = createWalletClient({
         account: accounts[0] as Hex,
-        chain: baseSepolia,
-        transport: custom(window.ethereum)
+        chain: monadTestnet,
+        transport: custom(ethereum)
       });
 
       setWalletClient(client);
       setAddress(accounts[0] as Hex);
       setIsConnected(true);
     } catch (err: any) {
-      setError(err.message || 'Failed to connect wallet');
-      console.error('Wallet connection error:', err);
+      console.error('钱包连接错误详情:', {
+        error: err,
+        message: err?.message,
+        code: err?.code,
+        stack: err?.stack,
+        data: err?.data
+      });
+      
+      // Provide user-friendly error messages
+      let errorMessage = '连接钱包失败';
+      
+      if (err?.message) {
+        errorMessage = err.message;
+      } else if (err?.code) {
+        switch (err.code) {
+          case 4001:
+            errorMessage = '用户拒绝了连接请求';
+            break;
+          case -32002:
+            errorMessage = '连接请求已在进行中，请检查钱包扩展';
+            break;
+          case 4902:
+            errorMessage = '网络未添加到钱包';
+            break;
+          default:
+            errorMessage = `连接失败 (错误代码: ${err.code})`;
+        }
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsConnecting(false);
     }
@@ -132,37 +219,46 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   // Listen for account changes
   useEffect(() => {
-    if (typeof window.ethereum !== 'undefined') {
-      const handleAccountsChanged = async (accounts: string[]) => {
-        if (accounts.length === 0) {
-          disconnectWallet();
-        } else if (accounts[0] !== address) {
-          // Re-connect with new account
-          const client = createWalletClient({
-            account: accounts[0] as Hex,
-            chain: baseSepolia,
-            transport: custom(window.ethereum)
-          });
-          
-          setWalletClient(client);
-          setAddress(accounts[0] as Hex);
-          setIsConnected(true);
-        }
-      };
-
-      const handleChainChanged = () => {
-        
-        window.location.reload();
-      };
-
-      window.ethereum.on('accountsChanged', handleAccountsChanged);
-      window.ethereum.on('chainChanged', handleChainChanged);
-
-      return () => {
-        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-        window.ethereum.removeListener('chainChanged', handleChainChanged);
-      };
+    if (typeof window.ethereum === 'undefined') {
+      return;
     }
+
+    // Handle multiple wallet providers
+    let ethereum = window.ethereum;
+    if (Array.isArray(ethereum)) {
+      ethereum = ethereum[0];
+    } else if (ethereum.providers && Array.isArray(ethereum.providers)) {
+      ethereum = ethereum.providers[0];
+    }
+
+    const handleAccountsChanged = async (accounts: string[]) => {
+      if (accounts.length === 0) {
+        disconnectWallet();
+      } else if (accounts[0] !== address) {
+        // Re-connect with new account
+        const client = createWalletClient({
+          account: accounts[0] as Hex,
+          chain: monadTestnet,
+          transport: custom(ethereum)
+        });
+        
+        setWalletClient(client);
+        setAddress(accounts[0] as Hex);
+        setIsConnected(true);
+      }
+    };
+
+    const handleChainChanged = () => {
+      window.location.reload();
+    };
+
+    ethereum.on('accountsChanged', handleAccountsChanged);
+    ethereum.on('chainChanged', handleChainChanged);
+
+    return () => {
+      ethereum.removeListener('accountsChanged', handleAccountsChanged);
+      ethereum.removeListener('chainChanged', handleChainChanged);
+    };
   }, [address, disconnectWallet]);
 
   const value: WalletContextType = {

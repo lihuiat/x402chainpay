@@ -1,22 +1,16 @@
 import { config } from "dotenv";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { serve } from "@hono/node-server";
 import { cors } from "hono/cors";
-import { paymentMiddleware, Network, Resource } from "x402-hono";
 import { v4 as uuidv4 } from "uuid";
 
 config();
 
-// Configuration from environment variables
-const facilitatorUrl = process.env.FACILITATOR_URL as Resource || "https://x402.org/facilitator";
-const payTo = process.env.ADDRESS as `0x${string}`;
-const network = (process.env.NETWORK as Network) || "base-sepolia";
+// Configuration from environment variables (all optional in simulated mode)
+const network = process.env.NETWORK || "monad-testnet";
+const payTo = process.env.ADDRESS || "0x000000000000000000000000000000000000dEaD";
 const port = parseInt(process.env.PORT || "3001");
-
-if (!payTo) {
-  console.error("❌ Please set your wallet ADDRESS in the .env file");
-  process.exit(1);
-}
 
 const app = new Hono();
 
@@ -33,31 +27,45 @@ interface Session {
   expiresAt: Date;
   type: "24hour" | "onetime";
   used?: boolean;
+  walletAddress?: string;
+  transactionHash?: string;
 }
 
 const sessions = new Map<string, Session>();
 
-// Configure x402 payment middleware with two payment options
-app.use(
-  paymentMiddleware(
-    payTo,
-    {
-      // 24-hour session access
-      "/api/pay/session": {
-        price: "$1.00",
-        network,
-      },
-      // One-time access/payment
-      "/api/pay/onetime": {
-        price: "$0.10",
-        network,
-      },
-    },
-    {
-      url: facilitatorUrl,
-    },
-  ),
-);
+interface PaymentRecord {
+  id: string;
+  type: Session["type"];
+  amountUsd: number;
+  walletAddress?: string;
+  transactionHash?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: Date;
+}
+
+const payments: PaymentRecord[] = [];
+const MAX_PAYMENT_HISTORY = 100;
+
+interface PaymentRequestPayload {
+  walletAddress?: string;
+  transactionHash?: string;
+  metadata?: Record<string, unknown>;
+}
+
+async function parsePaymentRequest<T>(c: Context, fallback: T): Promise<T> {
+  try {
+    return await c.req.json<T>();
+  } catch {
+    return fallback;
+  }
+}
+
+function recordPayment(entry: PaymentRecord) {
+  payments.push(entry);
+  if (payments.length > MAX_PAYMENT_HISTORY) {
+    payments.shift();
+  }
+}
 
 // Free endpoint - health check
 app.get("/api/health", (c) => {
@@ -67,7 +75,7 @@ app.get("/api/health", (c) => {
     config: {
       network,
       payTo,
-      facilitator: facilitatorUrl,
+      mode: "simulated-payments",
     },
   });
 });
@@ -93,19 +101,31 @@ app.get("/api/payment-options", (c) => {
 });
 
 // Paid endpoint - 24-hour session access ($1.00)
-app.post("/api/pay/session", (c) => {
+app.post("/api/pay/session", async (c) => {
+  const body = await parsePaymentRequest<PaymentRequestPayload>(c, {});
   const sessionId = uuidv4();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
-  
+
   const session: Session = {
     id: sessionId,
     createdAt: now,
     expiresAt,
     type: "24hour",
+    walletAddress: body.walletAddress,
+    transactionHash: body.transactionHash,
   };
 
   sessions.set(sessionId, session);
+  recordPayment({
+    id: sessionId,
+    type: "24hour",
+    amountUsd: 1,
+    walletAddress: body.walletAddress,
+    transactionHash: body.transactionHash,
+    metadata: body.metadata,
+    createdAt: now,
+  });
 
   return c.json({
     success: true,
@@ -117,24 +137,44 @@ app.post("/api/pay/session", (c) => {
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
       validFor: "24 hours",
+      walletAddress: session.walletAddress,
+      transactionHash: session.transactionHash,
+    },
+    payment: {
+      amountUsd: 1,
+      walletAddress: body.walletAddress,
+      transactionHash: body.transactionHash,
+      metadata: body.metadata,
     },
   });
 });
 
 // Paid endpoint - one-time access/payment ($0.10)
 app.post("/api/pay/onetime", async (c) => {
+  const body = await parsePaymentRequest<PaymentRequestPayload>(c, {});
   const sessionId = uuidv4();
   const now = new Date();
-  
+
   const session: Session = {
     id: sessionId,
     createdAt: now,
     expiresAt: new Date(now.getTime() + 5 * 60 * 1000), // 5 minutes to use
     type: "onetime",
     used: false,
+    walletAddress: body.walletAddress,
+    transactionHash: body.transactionHash,
   };
 
   sessions.set(sessionId, session);
+  recordPayment({
+    id: sessionId,
+    type: "onetime",
+    amountUsd: 0.1,
+    walletAddress: body.walletAddress,
+    transactionHash: body.transactionHash,
+    metadata: body.metadata,
+    createdAt: now,
+  });
 
   return c.json({
     success: true,
@@ -145,6 +185,14 @@ app.post("/api/pay/onetime", async (c) => {
       type: "onetime",
       createdAt: now.toISOString(),
       validFor: "5 minutes (single use)",
+      walletAddress: session.walletAddress,
+      transactionHash: session.transactionHash,
+    },
+    payment: {
+      amountUsd: 0.1,
+      walletAddress: body.walletAddress,
+      transactionHash: body.transactionHash,
+      metadata: body.metadata,
     },
   });
 });
@@ -172,6 +220,8 @@ app.get("/api/session/:sessionId", (c) => {
         createdAt: session.createdAt.toISOString(),
         expiresAt: session.expiresAt.toISOString(),
         used: session.used,
+        walletAddress: session.walletAddress,
+        transactionHash: session.transactionHash,
       }
     });
   }
@@ -190,6 +240,8 @@ app.get("/api/session/:sessionId", (c) => {
       createdAt: session.createdAt.toISOString(),
       expiresAt: session.expiresAt.toISOString(),
       remainingTime: session.expiresAt.getTime() - now.getTime(),
+      walletAddress: session.walletAddress,
+      transactionHash: session.transactionHash,
     },
   });
 });
@@ -207,9 +259,24 @@ app.get("/api/sessions", (c) => {
       type: session.type,
       createdAt: session.createdAt.toISOString(),
       expiresAt: session.expiresAt.toISOString(),
+      walletAddress: session.walletAddress,
+      transactionHash: session.transactionHash,
     }));
 
   return c.json({ sessions: activeSessions });
+});
+
+// Free endpoint - inspect recorded payments (demo only)
+app.get("/api/payments", (c) => {
+  const recentPayments = [...payments]
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, 25)
+    .map((payment) => ({
+      ...payment,
+      createdAt: payment.createdAt.toISOString(),
+    }));
+
+  return c.json({ payments: recentPayments });
 });
 
 console.log(`
@@ -217,6 +284,7 @@ console.log(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💰 Accepting payments to: ${payTo}
 🔗 Network: ${network}
+🧪 Mode: Simulated payments (no on-chain verification)
 🌐 Port: ${port}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📋 Payment Options:

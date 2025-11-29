@@ -1,13 +1,12 @@
-# x402 Server Example
+# Simulated Payment Server
 
-This server demonstrates x402 payment integration with multiple pricing tiers.
+This server now records payments in memory instead of relying on the x402 facilitator flow. It is useful when you want to prototype against networks that x402 does not yet support (for example Monad Testnet).
 
 ## Setup
 
-1. Create a `.env` file:
+1. Create a `.env` file (all fields optional in demo mode):
 ```env
-FACILITATOR_URL=https://x402.org/facilitator
-NETWORK=base-sepolia
+NETWORK=monad-testnet
 ADDRESS=0x_YOUR_WALLET_ADDRESS_HERE
 PORT=3001
 ```
@@ -29,7 +28,7 @@ npm run dev
 - `GET /api/pricing` - Get pricing information
 - `GET /api/session/:sessionId` - Check session status
 
-### Paid Endpoints
-- `POST /api/premium/content` - Access premium content ($0.10)
-- `POST /api/premium/action` - Perform premium action ($1.00)
-- `POST /api/premium/subscribe` - Monthly subscription ($5.00) 
+### Simulated Paid Endpoints
+- `POST /api/pay/session` - Records a 24-hour session purchase ($1.00)
+- `POST /api/pay/onetime` - Records a single-use purchase ($0.10)
+- `GET /api/payments` - Inspect recent payment records (demo only)

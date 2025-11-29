@@ -1,6 +1,8 @@
 # x402 Browser Wallet Payment Template
 
 > 🛠️ **A starter template for building payment-enabled applications with x402**
+>
+> ⚠️ *Note:* The official x402 SDK doesn't yet support Monad Testnet. This fork runs in a **simulated payment mode** so you can still prototype the wallet + UX flow while records are stored in memory.
 
 This is a simplified scaffolding project demonstrating [x402 payment protocol](https://x402.org) integration with browser wallet support. Use this as a foundation to build your own micropayment-enabled services, SaaS applications, or any project that needs frictionless web payments.
 
@@ -20,7 +22,7 @@ Learn more at [x402.org](https://x402.org) or check out the [GitHub repository](
 - **One-Time Access** ($0.10): Single-use payments for actions or content
 
 ✅ **Complete Implementation**:
-- Server with x402 payment middleware (Hono)
+- Server with simulated x402-style payment middleware (Hono)
 - React client with wallet integration (Viem)
 - Session management and validation
 - Clean, modern UI ready to customize
@@ -41,10 +43,9 @@ npm run install:all
 
 ### 2. Configure the Server
 
-Create `server/.env`:
+Create `server/.env` (all optional in demo mode):
 ```env
-FACILITATOR_URL=https://x402.org/facilitator
-NETWORK=base-sepolia
+NETWORK=monad-testnet
 ADDRESS=0x_YOUR_WALLET_ADDRESS_HERE
 PORT=3001
 ```
@@ -67,8 +68,8 @@ This starts:
 2. **Choose Payment Type**:
    - **24-Hour Session**: Pay $1.00 to get a session ID valid for 24 hours
    - **One-Time Access**: Pay $0.10 for single-use access (valid for 5 minutes)
-3. **Sign Payment**: User signs the payment request
-4. **Receive Session ID**: After payment, user gets a session ID
+3. **Submit Payment Request**: App sends the wallet address + metadata (simulated payment, no on-chain signature)
+4. **Receive Session ID**: After the request, user gets a session ID
 5. **Validate Session**: Use the session ID to access protected resources
 
 ### Session Types
@@ -94,10 +95,11 @@ This starts:
 - `GET /api/session/:sessionId` - Validate a session
 - `GET /api/sessions` - List active sessions
 
-### Paid Endpoints
+### Simulated Paid Endpoints
 
-- `POST /api/pay/session` - Purchase 24-hour session ($1.00)
-- `POST /api/pay/onetime` - Purchase one-time access ($0.10)
+- `POST /api/pay/session` - Record a 24-hour session purchase ($1.00)
+- `POST /api/pay/onetime` - Record a one-time access purchase ($0.10)
+- `GET /api/payments` - Inspect recent payment records (demo only)
 
 ## Client Features
 
@@ -109,12 +111,11 @@ This starts:
 
 ## Testing
 
-1. Get Base Sepolia ETH from [Coinbase Faucet](https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet)
-2. Get Base Sepolia USDC from [Circle Faucet](https://faucet.circle.com/)
-3. Connect browser wallet to the app
-4. Purchase a session or one-time access
-5. Use the session validator to check your session
-6. Watch one-time sessions expire after use
+1. (Optional) Get Monad Testnet MON from [Monad Faucet](https://faucet.monad.xyz)
+2. Connect browser wallet to the app
+3. Purchase a session or one-time access (request is recorded in memory)
+4. Use the session validator to check your session
+5. Watch one-time sessions expire after use
 
 ## Use This Template For
 
@@ -134,11 +135,13 @@ This scaffolding is perfect as a starting point for:
 The template uses two payment types, but you can easily modify them:
 
 ```typescript
-// In server/index.ts, customize your payment endpoints:
-"/api/pay/custom": {
-  price: "$0.50",  // Your price
-  network,
-}
+// In server/index.ts, adjust the simulated payment handler:
+app.post("/api/pay/session", async (c) => {
+  const body = await parsePaymentRequest(c, {});
+  const expiresAt = new Date(now.getTime() + 12 * 60 * 60 * 1000); // 12 hours
+  recordPayment({ amountUsd: 0.5, ... });
+  // ...
+});
 ```
 
 ### Adding New Features

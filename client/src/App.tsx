@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { WalletConnect } from './components/WalletConnect';
 import { useWallet } from './contexts/WalletContext';
-import { api, updateApiClient, type PaymentOption, type Session } from './services/api';
+import { api, type PaymentOption, type Session, type PaymentRecord } from './services/api';
 import './App.css';
 
 function App() {
@@ -12,23 +12,21 @@ function App() {
   const [loading, setLoading] = useState<string | null>(null);
   const [sessionInput, setSessionInput] = useState<string>('');
   const [validationResult, setValidationResult] = useState<any>(null);
-
-  // Update API client when wallet changes
-  useEffect(() => {
-    updateApiClient(walletClient);
-  }, [walletClient]);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
 
   // Check server health on mount
   useEffect(() => {
     checkServerHealth();
     loadPaymentOptions();
     loadActiveSessions();
+    loadPayments();
   }, []);
 
   const checkServerHealth = async () => {
     try {
       const health = await api.getHealth();
-      setServerStatus(`✅ Connected to ${health.config.network}`);
+      const mode = health.config?.mode ? ` [${health.config.mode}]` : '';
+      setServerStatus(`✅ Connected to ${health.config.network}${mode}`);
     } catch (error) {
       setServerStatus('❌ Server offline');
     }
@@ -52,11 +50,43 @@ function App() {
     }
   };
 
+  const loadPayments = async () => {
+    try {
+      const data = await api.getPayments();
+      setPayments(data.payments);
+    } catch (error) {
+      console.error('Failed to load payments:', error);
+    }
+  };
+
+  const requireWalletAddress = () => {
+    const address = walletClient?.account?.address;
+    if (!address) {
+      setValidationResult({
+        type: 'error',
+        message: '请先连接钱包再发起支付请求',
+      });
+    }
+    return address;
+  };
+
   const handle24HourSession = async () => {
+    const walletAddress = requireWalletAddress();
+    if (!walletAddress) {
+      return;
+    }
+
     setLoading('session');
     try {
-      const result = await api.purchase24HourSession();
+      const result = await api.purchase24HourSession({
+        walletAddress,
+        metadata: {
+          product: '24hour',
+          requestedAt: new Date().toISOString(),
+        },
+      });
       await loadActiveSessions();
+      await loadPayments();
       setValidationResult({
         type: 'success',
         message: result.message,
@@ -73,10 +103,22 @@ function App() {
   };
 
   const handleOneTimeAccess = async () => {
+    const walletAddress = requireWalletAddress();
+    if (!walletAddress) {
+      return;
+    }
+
     setLoading('onetime');
     try {
-      const result = await api.purchaseOneTimeAccess();
+      const result = await api.purchaseOneTimeAccess({
+        walletAddress,
+        metadata: {
+          product: 'onetime',
+          requestedAt: new Date().toISOString(),
+        },
+      });
       await loadActiveSessions();
+      await loadPayments();
       setValidationResult({
         type: 'success',
         message: result.message,
@@ -132,6 +174,9 @@ function App() {
 
         <section className="payment-section">
           <h2>2. Payment Options</h2>
+          {!walletClient?.account?.address && (
+            <p className="payment-hint">Connect your wallet to enable purchase buttons.</p>
+          )}
           <div className="payment-grid">
             {paymentOptions.map((option) => (
               <div key={option.endpoint} className="payment-card">
@@ -142,7 +187,7 @@ function App() {
                 {option.endpoint === '/api/pay/session' && (
                   <button 
                     onClick={handle24HourSession}
-                    disabled={loading === 'session'}
+                    disabled={loading === 'session' || !walletClient?.account?.address}
                     className="action-btn"
                   >
                     {loading === 'session' ? 'Processing...' : 'Purchase 24-Hour Session'}
@@ -152,7 +197,7 @@ function App() {
                 {option.endpoint === '/api/pay/onetime' && (
                   <button 
                     onClick={handleOneTimeAccess}
-                    disabled={loading === 'onetime'}
+                    disabled={loading === 'onetime' || !walletClient?.account?.address}
                     className="action-btn"
                   >
                     {loading === 'onetime' ? 'Processing...' : 'Purchase One-Time Access'}
@@ -191,6 +236,9 @@ function App() {
                       <p><strong>Type:</strong> {validationResult.session.type}</p>
                       <p><strong>Created:</strong> {new Date(validationResult.session.createdAt).toLocaleString()}</p>
                       <p><strong>Expires:</strong> {new Date(validationResult.session.expiresAt).toLocaleString()}</p>
+                      {validationResult.session.walletAddress && (
+                        <p><strong>Wallet:</strong> {validationResult.session.walletAddress}</p>
+                      )}
                       {validationResult.session.remainingTime && (
                         <p><strong>Remaining:</strong> {Math.floor(validationResult.session.remainingTime / 1000 / 60)} minutes</p>
                       )}
@@ -226,6 +274,29 @@ function App() {
                   <span className="session-expires">
                     Expires: {new Date(session.expiresAt).toLocaleString()}
                   </span>
+                  {session.walletAddress && (
+                    <span className="session-wallet">Wallet: {session.walletAddress}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {payments.length > 0 && (
+          <section className="sessions-section payments-section">
+            <h2>Recent Payment Records</h2>
+            <div className="sessions-list payments-list">
+              {payments.map((payment) => (
+                <div key={payment.id} className="session-item payment-item">
+                  <div className="payment-header">
+                    <span className={`session-type ${payment.type}`}>{payment.type}</span>
+                    <code>{payment.id}</code>
+                  </div>
+                  <p>Amount: ${payment.amountUsd.toFixed(2)}</p>
+                  <p>Wallet: {payment.walletAddress || 'N/A'}</p>
+                  {payment.transactionHash && <p>Tx: {payment.transactionHash}</p>}
+                  <p>Time: {new Date(payment.createdAt).toLocaleString()}</p>
                 </div>
               ))}
             </div>
@@ -235,8 +306,7 @@ function App() {
 
       <footer>
         <p>
-          This simplified example demonstrates two payment models: 24-hour session access and one-time payments.
-          Each purchase requires approval in wallet.
+          This simplified example now records payments in-memory instead of performing on-chain settlement, so you can prototype the UX before wiring up the real network logic.
         </p>
       </footer>
     </div>
